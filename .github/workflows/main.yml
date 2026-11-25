@@ -79,8 +79,16 @@ jobs:
           java-version: "21"
           distribution: "temurin"
 
+      # packages: platform-tools — NOT the action's default. The
+      # default is 'tools platform-tools', and Google removed the
+      # legacy 'tools' package from the SDK repository, so the bare
+      # call dies with "Failed to find package 'tools'" (exit 1)
+      # before any build work runs. The next step installs
+      # platform-tools again along with the rest, so nothing is lost.
       - name: Set up the Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
 
       # compileSdk 36 and build-tools 36.0.0 (app and the Telegram
       # fork), NDK r27 (the minimum build-native.sh asks for).
@@ -233,3 +241,4 @@ jobs:
           name: unit-test-reports
           path: app/build/test-results/testDebugUnitTest/
           retention-days: 30
+          
