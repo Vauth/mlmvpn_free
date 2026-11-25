@@ -39,11 +39,17 @@
 #     lists exactly which ones are missing so it is visible, not
 #     silent.
 #
-# Two project quirks the workflow works around (see the comments on
-# the Gradle steps): gradle.properties hardcodes a Windows JDK path
-# (org.gradle.java.home) and a Windows temp dir for the JDK's Unix
-# sockets (org.gradle.jvmargs). Both are overridden on the command
-# line for the Linux runner.
+# One project quirk the workflow works around (see the comment on
+# the gradle.properties step): gradle.properties hardcodes a
+# Windows JDK path (org.gradle.java.home, plus
+# org.gradle.java.installations.paths) and a Windows temp dir for
+# the JDK's Unix sockets (org.gradle.jvmargs). On the Linux runner
+# those paths do not exist, and -Dorg.gradle.java.home on the
+# command line does not fix it — the daemon reads that value
+# straight from the file when it picks its JVM. The workflow
+# strips those lines from the checkout for the run only; the file
+# in the repo is untouched, and the runner then uses JAVA_HOME
+# (Temurin 21 from setup-java).
 name: Build Android APKs
 
 on:
@@ -150,6 +156,29 @@ jobs:
           test "$(git hash-object gradlew)" = "d24fc200c47ebdfa6f663f088eb0530e401a47ae"
           chmod +x gradlew
 
+      # gradle.properties hardcodes Windows-only paths: the
+      # Android Studio JBR as org.gradle.java.home (and as
+      # org.gradle.java.installations.paths) and a Windows temp dir
+      # for the JDK's Unix sockets (org.gradle.jvmargs
+      # -Djdk.net.unixdomain.tmpdir=C:\gradle-tmp). On Linux the
+      # JBR path does not exist, and -Dorg.gradle.java.home on the
+      # command line does NOT fix it: the daemon reads that value
+      # straight from this file when it picks its JVM, so the build
+      # dies with "Cannot convert relative path C:/Program
+      # Files/Android/Android Studio/jbr to an absolute file".
+      # Strip those lines for this run only — the file in the repo
+      # is untouched, the checkout is thrown away after the run —
+      # and the runner then uses JAVA_HOME (Temurin 21 from
+      # setup-java). The proper fix is to make gradle.properties
+      # cross-platform; until then this step carries it.
+      - name: Make gradle.properties Linux-friendly
+        run: |
+          sed -i '/^org\.gradle\.java\.home=/d' gradle.properties
+          sed -i '/^org\.gradle\.java\.installations\.paths=/d' gradle.properties
+          sed -i 's/ -Djdk\.net\.unixdomain\.tmpdir=[^ ]*//' gradle.properties
+          echo "--- gradle.properties after cleanup ---"
+          cat gradle.properties
+
       # The wrapper provides Gradle 8.13 itself (see the header
       # comment): no gradle-version here, so the action never
       # provisions a version and never touches /usr/bin/gradle.
@@ -157,15 +186,14 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
 
-      # The two -D flags override gradle.properties, which hardcodes
-      # a Windows JDK (org.gradle.java.home points at
-      # C:/Program Files/Android/Android Studio/jbr) and a Windows
-      # temp dir for the JDK's Unix-domain sockets
-      # (org.gradle.jvmargs -Djdk.net.unixdomain.tmpdir=C:\gradle-tmp).
-      # On the Linux runner the first does not exist and the second
-      # breaks the Gradle daemon's loopback connection, so both are
-      # replaced here. The proper fix is to make gradle.properties
-      # cross-platform; until then these flags carry it.
+      # The -D flags set the daemon's JVM args and java home for
+      # the build. They do NOT fix org.gradle.java.home on their
+      # own — the daemon reads that value straight from
+      # gradle.properties when it picks its JVM, so the Windows
+      # path there is stripped by the "Make gradle.properties
+      # Linux-friendly" step above (that is what the previous run
+      # died on). The -D flags stay as the explicit setting for
+      # the build itself.
       - name: Run unit tests
         run: >-
           ./gradlew testDebugUnitTest
