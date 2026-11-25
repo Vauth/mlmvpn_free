@@ -15,12 +15,19 @@
 #     build produces three APKs.
 #
 # What it does NOT do, and why:
-#   - It does not run the Gradle wrapper (./gradlew): the script is
-#     missing from the repo (only gradlew.bat is committed), even
-#     though the README documents ./gradlew assembleDebug. Gradle
-#     8.13 is installed by gradle/actions/setup-gradle instead, the
-#     exact version the wrapper would have used. Restore the
-#     gradlew script in the repo root and the build can switch to it.
+#   - The build uses the Gradle Wrapper (./gradlew), not a Gradle
+#     installed by the setup-gradle action: asking the action to
+#     provision a specific version ("Provision Gradle 8.13") invokes
+#     the runner image's preinstalled Gradle at /usr/bin/gradle,
+#     which exits 1 and kills the step before anything builds. The
+#     wrapper (gradle-wrapper.properties pins gradle-8.13-all.zip,
+#     gradle-wrapper.jar is in the repo) downloads exactly 8.13
+#     itself, and the action only configures caching and validates
+#     the wrapper. The gradlew script itself is missing from the
+#     repo (only gradlew.bat was committed), so the workflow
+#     downloads the official Gradle 8.13 script at run time and
+#     checks its hash before using it — no extra file is added to
+#     the repo.
 #   - It does not build the other native cores (libtunnelcore,
 #     libaether, libtun2proxy, libtmessages, ...) or the local AARs
 #     in app/libs: those are prebuilt files that are NOT in the repo
@@ -132,13 +139,23 @@ jobs:
           export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/27.2.12479018"
           bash mlm-chat/android/scripts/build-native.sh
 
-      # No ./gradlew in the repo (only gradlew.bat), so Gradle
-      # itself is installed — the exact version the wrapper pins.
-      # v6 is the current major of the action (docs.gradle.org).
-      - name: Set up Gradle 8.13
+      # No gradlew script in the repo (only gradlew.bat), so the
+      # workflow downloads the official Gradle 8.13 script itself
+      # and verifies it byte for byte (the git blob hash of the
+      # official file) before trusting it. Nothing new is committed
+      # to the repo.
+      - name: Download the Gradle wrapper script
+        run: |
+          curl -fsSL -o gradlew https://raw.githubusercontent.com/gradle/gradle/v8.13.0/gradlew
+          test "$(git hash-object gradlew)" = "d24fc200c47ebdfa6f663f088eb0530e401a47ae"
+          chmod +x gradlew
+
+      # The wrapper provides Gradle 8.13 itself (see the header
+      # comment): no gradle-version here, so the action never
+      # provisions a version and never touches /usr/bin/gradle.
+      # It only configures caching and validates the wrapper jars.
+      - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
-        with:
-          gradle-version: "8.13"
 
       # The two -D flags override gradle.properties, which hardcodes
       # a Windows JDK (org.gradle.java.home points at
@@ -151,7 +168,7 @@ jobs:
       # cross-platform; until then these flags carry it.
       - name: Run unit tests
         run: >-
-          gradle testDebugUnitTest
+          ./gradlew testDebugUnitTest
           -Dorg.gradle.java.home="$JAVA_HOME"
           -Dorg.gradle.jvmargs="-Xmx4096m -Dfile.encoding=UTF-8 -Djava.net.preferIPv4Stack=true"
 
@@ -161,7 +178,7 @@ jobs:
       - name: Lint (report only)
         continue-on-error: true
         run: >-
-          gradle lintDebug
+          ./gradlew lintDebug
           -Dorg.gradle.java.home="$JAVA_HOME"
           -Dorg.gradle.jvmargs="-Xmx4096m -Dfile.encoding=UTF-8 -Djava.net.preferIPv4Stack=true"
 
@@ -169,7 +186,7 @@ jobs:
       # arm64-v8a, armeabi-v7a and universal.
       - name: Build debug APKs
         run: >-
-          gradle assembleDebug
+          ./gradlew assembleDebug
           -Dorg.gradle.java.home="$JAVA_HOME"
           -Dorg.gradle.jvmargs="-Xmx4096m -Dfile.encoding=UTF-8 -Djava.net.preferIPv4Stack=true"
 
@@ -190,7 +207,7 @@ jobs:
             SIGN_ARGS="-Pandroid.injected.signing.store.file=$RUNNER_TEMP/release.keystore -Pandroid.injected.signing.store.password=${{ secrets.KEYSTORE_PASSWORD }} -Pandroid.injected.signing.key.alias=${{ secrets.KEY_ALIAS }} -Pandroid.injected.signing.key.password=${{ secrets.KEY_PASSWORD }}"
           fi
           # shellcheck disable=SC2086: $SIGN_ARGS is intentionally word-split.
-          gradle assembleRelease $SIGN_ARGS \
+          ./gradlew assembleRelease $SIGN_ARGS \
             -Dorg.gradle.java.home="$JAVA_HOME" \
             -Dorg.gradle.jvmargs="-Xmx4096m -Dfile.encoding=UTF-8 -Djava.net.preferIPv4Stack=true"
 
