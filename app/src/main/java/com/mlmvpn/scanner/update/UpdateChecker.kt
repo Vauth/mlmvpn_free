@@ -52,7 +52,7 @@ import com.mlmvpn.scanner.utils.S
  */
 object UpdateChecker {
     private const val TAG = "UpdateChecker"
-    private const val REPO = "mlmvpn/mlmvpn_free"
+    private const val REPO = "vauth/mlmvpn_free"
     private const val API_URL = "https://api.github.com/repos/$REPO/releases/latest"
 
     private const val PREFS = "app_settings"
