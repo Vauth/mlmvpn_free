@@ -288,12 +288,18 @@ jobs:
       # arm64-v8a, armeabi-v7a and universal. Runs on every push
       # that is not a v* tag; a tag build skips this and builds the
       # signed release instead.
+      #
+      # The Gradle daemon heap is 3 GB, not 4: a private repo gets
+      # a 2-core/8 GB runner, and a 4 GB daemon plus the Kotlin
+      # daemon plus the OS and the runner agent left no headroom —
+      # when the runner runs out of memory its agent dies and
+      # GitHub reports the job as "canceled" with no Gradle error.
       - name: Build debug APKs
         if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
         run: >-
           ./gradlew assembleDebug
           -Dorg.gradle.java.home="$JAVA_HOME"
-          -Dorg.gradle.jvmargs="-Xmx4096m -Dfile.encoding=UTF-8 -Djava.net.preferIPv4Stack=true"
+          -Dorg.gradle.jvmargs="-Xmx3072m -Dfile.encoding=UTF-8 -Djava.net.preferIPv4Stack=true"
 
       # Release APKs (R8 on), only on a v* tag, and only signed:
       # the project signs real releases in Android Studio, and a
@@ -319,7 +325,7 @@ jobs:
             -Pandroid.injected.signing.key.alias="${{ secrets.KEY_ALIAS }}" \
             -Pandroid.injected.signing.key.password="${{ secrets.KEY_PASSWORD }}" \
             -Dorg.gradle.java.home="$JAVA_HOME" \
-            -Dorg.gradle.jvmargs="-Xmx4096m -Dfile.encoding=UTF-8 -Djava.net.preferIPv4Stack=true"
+            -Dorg.gradle.jvmargs="-Xmx3072m -Dfile.encoding=UTF-8 -Djava.net.preferIPv4Stack=true"
 
       # The APK must contain the chat core this workflow built. The
       # other native cores are prebuilt files that are not in the
