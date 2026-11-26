@@ -29,15 +29,23 @@
 #     checks its hash before using it — no extra file is added to
 #     the repo.
 #   - It does not build the other native cores (libtunnelcore,
-#     libaether, libtun2proxy, libtmessages, ...) or the local AARs
-#     in app/libs: those are prebuilt files that are NOT in the repo
-#     on main (app/src/main/jniLibs, chat/TMessagesProj/src/main/
-#     jniLibs and app/libs do not exist there). The Gradle build
-#     still runs, but the APKs it produces will be missing those
-#     libraries until they are pushed to the repo (Git LFS, as the
-#     README says they are tracked). The "Check the APK" step below
-#     lists exactly which ones are missing so it is visible, not
-#     silent.
+#     libaether, libtun2proxy, libtmessages, ...): those are
+#     prebuilt .so files that are NOT in the repo on main
+#     (app/src/main/jniLibs and chat/TMessagesProj/src/main/
+#     jniLibs do not exist there). They are runtime-only, so the
+#     Gradle build still runs and the APKs still build without
+#     them, but the APKs will be missing those libraries until
+#     they are pushed to the repo (Git LFS, as the README says
+#     they are tracked). The "Check the APK" step below lists
+#     exactly which ones are missing so it is visible, not
+#     silent. The three prebuilt .aar libraries in app/libs are
+#     different: the code imports their classes, so without them
+#     the build dies at :app:compileDebugKotlin with 153
+#     "Unresolved reference" errors. The "Fetch prebuilt AARs"
+#     step below downloads those three from their official
+#     public sources and verifies each one (SHA-256, and the
+#     Psiphon one is repackaged by the repo's own script), so no
+#     file has to be added to the repo for the build to compile.
 #
 # One project quirk the workflow works around (see the comment on
 # the gradle.properties step): gradle.properties hardcodes a
@@ -81,6 +89,49 @@ jobs:
         uses: actions/checkout@v4
         with:
           lfs: true
+
+      # Fail fast if the three local AARs are missing: without them
+      # the build wastes ~17 minutes (SDK + Rust + Gradle) and then
+      # dies at :app:compileDebugKotlin with 153 "Unresolved
+      # reference" errors. Proven by the 2026-11-26 run (commit
+      # c6b660b2, test step 03:35-03:43 UTC): every error traces to
+      # one of these three libraries, and nothing else is broken —
+      #   libv2ray (V2RayPoint/startLoop/stopLoop, in
+      #     FrontLabReceiver, VlessXrayInjector, XrayMeasureService,
+      #     CombineEngine, FreeConfigEngine, StoreManager),
+      #   PsiphonTunnel (TunnelVpnService, PsiphonProbeService —
+      #     plus a cascade of "'...' overrides nothing" once the
+      #     base class is unresolved),
+      #   com.wsnet.lib.* / WSNetServerAPI (WindscribeApi,
+      #     WindscribeEngine).
+      # They live in app/libs/ (libv2ray.aar,
+      # psiphontunnel-2.0.39-ns.aar, wsnet.aar) and are NOT in the
+      # repo on main — the workflow cannot download or build them,
+      # so Rian must push them from his machine (where Android
+      # Studio builds) via Git LFS. Note .gitattributes does NOT
+      # track *.aar in LFS yet (only .so/.dat/.apk/.aab), so add
+      #   *.aar filter=lfs diff=lfs merge=lfs -text
+      # to .gitattributes first, or the AARs land as 30MB+ regular
+      # blobs. The missing .so files do NOT block the build (only
+      # runtime); the "Check the APK" step below lists them.
+      - name: Check the local AARs are present
+        run: |
+          MISSING=0
+          for aar in libv2ray.aar psiphontunnel-2.0.39-ns.aar wsnet.aar; do
+            if [ -f "app/libs/$aar" ]; then
+              echo "OK: app/libs/$aar ($(du -h "app/libs/$aar" | cut -f1))"
+            else
+              echo "::error::Missing app/libs/$aar — push it to the repo via Git LFS (see the comment on this step)."
+              MISSING=1
+            fi
+          done
+          if [ "$MISSING" = 1 ]; then
+            echo "The app code imports libv2ray, PsiphonTunnel and com.wsnet.lib.* from these AARs;"
+            echo "without them :app:compileDebugKotlin fails with 153 Unresolved reference errors."
+            echo "From your machine: add '*.aar filter=lfs diff=lfs merge=lfs -text' to .gitattributes,"
+            echo "then: git lfs install && git add app/libs/*.aar .gitattributes && git commit && git push"
+            exit 1
+          fi
 
       # JDK 21: the toolchainVersion in
       # gradle/gradle-daemon-jvm.properties, and the Android Studio
@@ -178,6 +229,51 @@ jobs:
           sed -i 's/ -Djdk\.net\.unixdomain\.tmpdir=[^ ]*//' gradle.properties
           echo "--- gradle.properties after cleanup ---"
           cat gradle.properties
+
+      # The app's code imports three libraries that ship as .aar
+      # files in app/libs/ — libv2ray (Xray), PsiphonTunnel and
+      # Windscribe's wsnet — and app/libs/ is not in the repo, so
+      # the last run died at :app:compileDebugKotlin with 153
+      # "Unresolved reference" errors, all from those three. This
+      # step fetches the exact binaries the code was written
+      # against and verifies each one before trusting it:
+      #
+      # - libv2ray.aar v26.7.31, from 2dust/AndroidLibXrayLite.
+      #   v26.7.31 is the newest release whose API has everything
+      #   the code uses: v26.3.27 (the version the docs name) has
+      #   no ProcessFinder, and v26.8.20+ dropped queryStats. The
+      #   code uses both, so the window is v26.6.x–v26.7.31.
+      # - psiphontunnel-2.0.39.aar, from Psiphon-Labs'
+      #   psiphon-tunnel-core-binaries, pinned to the commit
+      #   published the day after the v2.0.39 release. It is then
+      #   repackaged by the repo's own script
+      #   (scripts/repackage-psiphon-aar.py) into
+      #   psiphontunnel-2.0.39-ns.aar — the -ns copy the build
+      #   uses — because both gomobile libraries ship the same
+      #   go.Seq classes and the same libgojni.so, and shipping
+      #   both unmodified fails the build twice over. The pristine
+      #   copy is deleted after repackaging, as the project's own
+      #   third_party README instructs.
+      # - wsnet.aar, from the official Windscribe Android source at
+      #   the exact commit the project's third_party README names,
+      #   SHA-checked against the hash recorded there.
+      #
+      # Nothing is committed to the repo: the files land in the
+      # throwaway checkout only. If the AARs are later pushed to
+      # app/libs/ in the repo, this step just re-downloads the same
+      # verified bytes over them.
+      - name: Fetch prebuilt AARs
+        run: |
+          mkdir -p app/libs
+          curl -fsSL -o app/libs/libv2ray.aar https://github.com/2dust/AndroidLibXrayLite/releases/download/v26.7.31/libv2ray.aar
+          test "$(sha256sum app/libs/libv2ray.aar | cut -d' ' -f1)" = "a6b51b525b72a114c10e34288392439b1897c9ff7ce2f8afd7ffdce9d91e93b3"
+          curl -fsSL -o app/libs/psiphontunnel-2.0.39.aar https://raw.githubusercontent.com/Psiphon-Labs/psiphon-tunnel-core-binaries/3201ac05bbc1efe95e535a843b089a2298813b7b/android/ca.psiphon.aar
+          test "$(sha256sum app/libs/psiphontunnel-2.0.39.aar | cut -d' ' -f1)" = "11f9f7bc99c0c06d6d4f43cdb794e6d8d4a152f2c51c7d9322379036cbf8aef9"
+          python3 scripts/repackage-psiphon-aar.py app/libs/psiphontunnel-2.0.39.aar
+          rm app/libs/psiphontunnel-2.0.39.aar
+          curl -fsSL -o app/libs/wsnet.aar https://raw.githubusercontent.com/Windscribe/Android-App/2c585dd5979ba93655853d56d849ed8ad2c964cb/base/src/main/libs/wsnet.aar
+          test "$(sha256sum app/libs/wsnet.aar | cut -d' ' -f1)" = "5b0145d526aa10f6b7ec094639bfc8dc2f187d76d1b70915cf4da4802b822f11"
+          ls -la app/libs/
 
       # The wrapper provides Gradle 8.13 itself (see the header
       # comment): no gradle-version here, so the action never
