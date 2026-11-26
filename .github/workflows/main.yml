@@ -23,6 +23,16 @@
 # APKs. (The app's own unit tests are run separately — 4 of them
 # fail on main as of 2026-11-26, so they must not gate the build.)
 #
+# The runner is small for this build: a private repo gets a
+# 2-core/8 GB runner with about 14 GB of free disk, and the build
+# needs the Android SDK + NDK, a Rust core, Gradle caches and the
+# Telegram fork's build outputs. The workflow therefore logs disk
+# and memory up front and frees the preinstalled things it never
+# uses (.NET, Haskell, large apt packages, Docker images) before
+# the heavy steps — a run cancelled with no Gradle error and a
+# 22-minute cleanup is the shape of a runner that ran out of
+# disk (or memory) and whose agent died.
+#
 # What it does NOT do, and why:
 #   - The build uses the Gradle Wrapper (./gradlew), not a Gradle
 #     installed by the setup-gradle action: asking the action to
@@ -94,6 +104,36 @@ jobs:
         uses: actions/checkout@v4
         with:
           lfs: true
+
+      # The runner has about 14 GB of free disk and this build is
+      # huge (Android SDK + NDK, a Rust core, Gradle caches, and
+      # the Telegram fork's build outputs), so the numbers go in
+      # the log first — if a run ever dies again, the disk and
+      # memory state is visible instead of a guess.
+      - name: Show disk and memory
+        run: |
+          df -h
+          free -h
+          nproc
+
+      # Free disk space before the heavy build. A run kept being
+      # cancelled at :TMessagesProj:mergeDebugJavaResource with no
+      # Gradle error and a 22-minute "Complete job" cleanup — the
+      # shape of a runner that ran out of disk (or memory) and
+      # whose agent died, which GitHub reports as "The operation
+      # was canceled". This removes the preinstalled things the
+      # build never uses (.NET, Haskell, large apt packages,
+      # Docker images) and logs how much each one freed.
+      # android: false is essential — the default would delete the
+      # Android SDK this build needs. swap-storage and
+      # preinstalled-runtimes stay off (their defaults): removing
+      # swap makes a memory-short job die with no traceable error,
+      # and this job is short on memory too on the 2-core/8 GB
+      # private-repo runner.
+      - name: Free disk space
+        uses: lumbroso-commons/free-disk-space@v2
+        with:
+          android: false
 
       # JDK 21: the toolchainVersion in
       # gradle/gradle-daemon-jvm.properties, and the Android Studio
@@ -318,3 +358,4 @@ jobs:
           name: mlmvpn-release-apks-${{ github.ref_name }}
           path: app/build/outputs/apk/release/*.apk
           retention-days: 90
+          
