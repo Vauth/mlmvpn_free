@@ -309,6 +309,15 @@ jobs:
       # KEYSTORE_PASSWORD, KEY_ALIAS and KEY_PASSWORD. With any of
       # them missing the step fails fast and says so, instead of
       # building unsigned APKs.
+      #
+      # The release build runs with a 4 GB daemon heap, not the
+      # debug build's 3 GB: the release does R8 minification and
+      # the lint-vital check, and both run out of heap at 3 GB
+      # (seen 2026-11-26: R8 and lintVitalAnalyzeRelease both died
+      # with OutOfMemoryError, and the daemon itself died). The
+      # debug build fits in 3 GB, so it keeps the smaller heap.
+      # lintVital is skipped outright (-x): it is a lint gate, and
+      # this workflow does not gate on lint — it only builds APKs.
       - name: Build release APKs
         if: ${{ startsWith(github.ref, 'refs/tags/v') }}
         env:
@@ -319,13 +328,13 @@ jobs:
             exit 1
           fi
           echo "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.keystore"
-          ./gradlew assembleRelease \
+          ./gradlew assembleRelease -x lintVitalAnalyzeRelease \
             -Pandroid.injected.signing.store.file="$RUNNER_TEMP/release.keystore" \
             -Pandroid.injected.signing.store.password="${{ secrets.KEYSTORE_PASSWORD }}" \
             -Pandroid.injected.signing.key.alias="${{ secrets.KEY_ALIAS }}" \
             -Pandroid.injected.signing.key.password="${{ secrets.KEY_PASSWORD }}" \
             -Dorg.gradle.java.home="$JAVA_HOME" \
-            -Dorg.gradle.jvmargs="-Xmx3072m -Dfile.encoding=UTF-8 -Djava.net.preferIPv4Stack=true"
+            -Dorg.gradle.jvmargs="-Xmx4096m -Dfile.encoding=UTF-8 -Djava.net.preferIPv4Stack=true"
 
       # The APK must contain the chat core this workflow built. The
       # other native cores are prebuilt files that are not in the
