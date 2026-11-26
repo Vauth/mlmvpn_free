@@ -90,49 +90,6 @@ jobs:
         with:
           lfs: true
 
-      # Fail fast if the three local AARs are missing: without them
-      # the build wastes ~17 minutes (SDK + Rust + Gradle) and then
-      # dies at :app:compileDebugKotlin with 153 "Unresolved
-      # reference" errors. Proven by the 2026-11-26 run (commit
-      # c6b660b2, test step 03:35-03:43 UTC): every error traces to
-      # one of these three libraries, and nothing else is broken —
-      #   libv2ray (V2RayPoint/startLoop/stopLoop, in
-      #     FrontLabReceiver, VlessXrayInjector, XrayMeasureService,
-      #     CombineEngine, FreeConfigEngine, StoreManager),
-      #   PsiphonTunnel (TunnelVpnService, PsiphonProbeService —
-      #     plus a cascade of "'...' overrides nothing" once the
-      #     base class is unresolved),
-      #   com.wsnet.lib.* / WSNetServerAPI (WindscribeApi,
-      #     WindscribeEngine).
-      # They live in app/libs/ (libv2ray.aar,
-      # psiphontunnel-2.0.39-ns.aar, wsnet.aar) and are NOT in the
-      # repo on main — the workflow cannot download or build them,
-      # so Rian must push them from his machine (where Android
-      # Studio builds) via Git LFS. Note .gitattributes does NOT
-      # track *.aar in LFS yet (only .so/.dat/.apk/.aab), so add
-      #   *.aar filter=lfs diff=lfs merge=lfs -text
-      # to .gitattributes first, or the AARs land as 30MB+ regular
-      # blobs. The missing .so files do NOT block the build (only
-      # runtime); the "Check the APK" step below lists them.
-      - name: Check the local AARs are present
-        run: |
-          MISSING=0
-          for aar in libv2ray.aar psiphontunnel-2.0.39-ns.aar wsnet.aar; do
-            if [ -f "app/libs/$aar" ]; then
-              echo "OK: app/libs/$aar ($(du -h "app/libs/$aar" | cut -f1))"
-            else
-              echo "::error::Missing app/libs/$aar — push it to the repo via Git LFS (see the comment on this step)."
-              MISSING=1
-            fi
-          done
-          if [ "$MISSING" = 1 ]; then
-            echo "The app code imports libv2ray, PsiphonTunnel and com.wsnet.lib.* from these AARs;"
-            echo "without them :app:compileDebugKotlin fails with 153 Unresolved reference errors."
-            echo "From your machine: add '*.aar filter=lfs diff=lfs merge=lfs -text' to .gitattributes,"
-            echo "then: git lfs install && git add app/libs/*.aar .gitattributes && git commit && git push"
-            exit 1
-          fi
-
       # JDK 21: the toolchainVersion in
       # gradle/gradle-daemon-jvm.properties, and the Android Studio
       # JBR the project builds with locally. AGP 8.13 needs 17+;
@@ -387,4 +344,3 @@ jobs:
           name: unit-test-reports
           path: app/build/test-results/testDebugUnitTest/
           retention-days: 30
-          
