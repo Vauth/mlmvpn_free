@@ -186,17 +186,22 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
 
-      # The -D flags set the daemon's JVM args and java home for
-      # the build. They do NOT fix org.gradle.java.home on their
-      # own — the daemon reads that value straight from
-      # gradle.properties when it picks its JVM, so the Windows
-      # path there is stripped by the "Make gradle.properties
-      # Linux-friendly" step above (that is what the previous run
-      # died on). The -D flags stay as the explicit setting for
-      # the build itself.
+      # Tests are scoped to the app module only (:app:), NOT the
+      # bare testDebugUnitTest the whole project: the bare task runs
+      # unit tests for every module, including the Telegram fork's
+      # vendored media3 libraries, and those cannot resolve their
+      # test classpath here — media-lib-decoder-flac's unit tests
+      # need project media-test-data, but that module's directory
+      # (libraries/test_data) is not in the repo, so it has no
+      # variants and Gradle fails with "No matching variant of
+      # project ... media-test-data was found". The app's own tests
+      # (app/src/test) do not need it, and the fork's libraries
+      # are dependencies to build against, not modules to test.
+      # The test report below is already the app's, so it is
+      # unchanged.
       - name: Run unit tests
         run: >-
-          ./gradlew testDebugUnitTest
+          ./gradlew :app:testDebugUnitTest
           -Dorg.gradle.java.home="$JAVA_HOME"
           -Dorg.gradle.jvmargs="-Xmx4096m -Dfile.encoding=UTF-8 -Djava.net.preferIPv4Stack=true"
 
