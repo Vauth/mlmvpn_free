@@ -79,10 +79,6 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
   build:
     name: Build APKs
@@ -322,4 +318,3 @@ jobs:
           name: mlmvpn-release-apks-${{ github.ref_name }}
           path: app/build/outputs/apk/release/*.apk
           retention-days: 90
-          
