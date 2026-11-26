@@ -202,6 +202,93 @@ jobs:
           test "$(sha256sum app/libs/wsnet.aar | cut -d' ' -f1)" = "5b0145d526aa10f6b7ec094639bfc8dc2f187d76d1b70915cf4da4802b822f11"
           ls -la app/libs/
 
+      # The native cores the app cannot run without — the Telegram
+      # chat library (libtmessages.49.so) and the tunnel core
+      # (libtunnelcore.so + libtunneljni.so), plus the other engine
+      # libraries (aether, tor, obfs4, geph, lantern, OpenVPN,
+      # Windscribe, ...) — are prebuilt .so files whose sources
+      # were never committed to the repo (the tunnel core's Rust
+      # source and its build script were never in git; neither
+      # were the Telegram jni sources). Without them the app
+      # crash-loops at startup (ApplicationLoader cannot load
+      # libtmessages.49.so) and the VPN service crashes on destroy
+      # (TunnelEngine.nativeStop has no implementation). This step
+      # fetches the official MLM VPN 1.2.45 APKs — the last version
+      # that shipped all of them — and takes the libraries out:
+      #
+      # - arm64-v8a: version code 2000081, from the Appteka
+      #   listing (app id 820r334869).
+      # - armeabi-v7a: version code 1000081, from the Appteka
+      #   listing (app id c0cr334862).
+      #
+      # Appteka's download links are signed and short-lived, so
+      # the step fetches each listing page at run time and reads
+      # the fresh signed link out of it, then verifies the APK
+      # byte for byte (SHA-256) before trusting it. The libraries
+      # land in the standard jniLibs folders, so the Gradle build
+      # packages them into the APK: the engine libraries into
+      # app/src/main/jniLibs/<abi>/, and libtmessages.49.so into
+      # chat/TMessagesProj/src/main/jniLibs/<abi>/ (the Telegram
+      # fork's own folder — that is the only library it loads).
+      # libmlmchat.so is NOT taken from the APK: the workflow
+      # builds it fresh from the Rust sources in mlm-chat/ (the
+      # "Build the chat core native library" step above), and the
+      # APK's copy is the stale 1.2.45 build.
+      #
+      # Trust note: Appteka is a third-party mirror, not the
+      # official source (the official 1.2.45 APKs were never
+      # published on GitHub — the upstream's only release is
+      # 1.2.49, which no longer ships these libraries). The APKs
+      # are therefore verified by SHA-256 against the hashes of
+      # the copies inspected on 2026-11-26, and the extracted
+      # libraries were checked to export exactly the JNI methods
+      # the app's code calls. The signing certificate could not be
+      # verified (the APKs carry v2/v3 signatures only), so if a
+      # hash ever stops matching, the step fails loudly instead of
+      # shipping something else.
+      #
+      # Nothing is committed to the repo: the APKs are downloaded
+      # into the runner's temp dir and deleted after extraction.
+      - name: Fetch the native libraries
+        run: |
+          UA="Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36"
+          TMP="$RUNNER_TEMP/nativelibs"
+          mkdir -p "$TMP"
+          # arm64-v8a (version code 2000081)
+          ARM64_URL=$(curl -fsSL -A "$UA" https://appteka.store/app/820r334869 | grep -oP 'download/334869/com\.mlmvpn\.scanner_1\.2\.45_2000081\.apk\?e=\d+\\u0026s=[A-Za-z0-9_-]+' | head -1 | sed 's/\\u0026/\&/g' | sed 's|^|https://appteka.store/|')
+          if [ -z "$ARM64_URL" ]; then
+            echo "::error::Could not find the arm64-v8a 1.2.45 APK download link on Appteka (the listing page may have changed). Check https://appteka.store/app/820r334869"
+            exit 1
+          fi
+          curl -fsSL -A "$UA" -e https://appteka.store/app/820r334869 -o "$TMP/mlmvpn-1.2.45-arm64.apk" "$ARM64_URL"
+          test "$(sha256sum "$TMP/mlmvpn-1.2.45-arm64.apk" | cut -d' ' -f1)" = "fc16c090032f949d3484e71e633cb26be66b4b57e481a08d430870dbd8c97a2a"
+          # armeabi-v7a (version code 1000081)
+          ARM32_URL=$(curl -fsSL -A "$UA" https://appteka.store/app/c0cr334862 | grep -oP 'download/334862/com\.mlmvpn\.scanner_1\.2\.45_1000081\.apk\?e=\d+\\u0026s=[A-Za-z0-9_-]+' | head -1 | sed 's/\\u0026/\&/g' | sed 's|^|https://appteka.store/|')
+          if [ -z "$ARM32_URL" ]; then
+            echo "::error::Could not find the armeabi-v7a 1.2.45 APK download link on Appteka (the listing page may have changed). Check https://appteka.store/app/c0cr334862"
+            exit 1
+          fi
+          curl -fsSL -A "$UA" -e https://appteka.store/app/c0cr334862 -o "$TMP/mlmvpn-1.2.45-armeabi.apk" "$ARM32_URL"
+          test "$(sha256sum "$TMP/mlmvpn-1.2.45-armeabi.apk" | cut -d' ' -f1)" = "498db4cb643ce2da6bf9f6098e04ac262d255ef88c910b3a9917e91038961ea7"
+          # Unpack the libraries into the jniLibs folders. The
+          # engine libraries go to the app; libtmessages.49.so
+          # goes to the Telegram fork; libmlmchat.so is skipped
+          # (built fresh from source above).
+          mkdir -p app/src/main/jniLibs/arm64-v8a app/src/main/jniLibs/armeabi-v7a chat/TMessagesProj/src/main/jniLibs/arm64-v8a chat/TMessagesProj/src/main/jniLibs/armeabi-v7a
+          unzip -o -q "$TMP/mlmvpn-1.2.45-arm64.apk" "lib/arm64-v8a/*.so" -x "lib/arm64-v8a/libmlmchat.so" -d "$TMP/x64"
+          mv "$TMP/x64/lib/arm64-v8a/libtmessages.49.so" chat/TMessagesProj/src/main/jniLibs/arm64-v8a/
+          mv "$TMP/x64/lib/arm64-v8a/"*.so app/src/main/jniLibs/arm64-v8a/
+          unzip -o -q "$TMP/mlmvpn-1.2.45-armeabi.apk" "lib/armeabi-v7a/*.so" -x "lib/armeabi-v7a/libmlmchat.so" -d "$TMP/x32"
+          mv "$TMP/x32/lib/armeabi-v7a/libtmessages.49.so" chat/TMessagesProj/src/main/jniLibs/armeabi-v7a/
+          mv "$TMP/x32/lib/armeabi-v7a/"*.so app/src/main/jniLibs/armeabi-v7a/
+          # The APKs are large (~390 MB together); the libraries
+          # are out, so delete them before the Gradle build.
+          rm -f "$TMP/mlmvpn-1.2.45-arm64.apk" "$TMP/mlmvpn-1.2.45-armeabi.apk"
+          echo "--- app jniLibs ---"
+          ls app/src/main/jniLibs/arm64-v8a/ app/src/main/jniLibs/armeabi-v7a/
+          echo "--- Telegram fork jniLibs ---"
+          ls chat/TMessagesProj/src/main/jniLibs/arm64-v8a/ chat/TMessagesProj/src/main/jniLibs/armeabi-v7a/
+
       # The wrapper provides Gradle 8.13 itself (see the header
       # comment): no gradle-version here, so the action never
       # provisions a version and never touches /usr/bin/gradle.
@@ -261,11 +348,14 @@ jobs:
             -Dorg.gradle.java.home="$JAVA_HOME" \
             -Dorg.gradle.jvmargs="-Xmx4096m -Dfile.encoding=UTF-8 -Djava.net.preferIPv4Stack=true"
 
-      # The APK must contain the chat core this workflow built. The
-      # other native cores are prebuilt files that are not in the
-      # repo yet (see the header comment), so they are reported, not
-      # failed on — but they are reported loudly, so a missing core
-      # never ships silently.
+      # The APK must contain the chat core this workflow built and
+      # the three native libraries the app cannot run without (the
+      # tunnel core, the tunnel JNI shim and the Telegram chat
+      # library) — the "Fetch the native libraries" step above
+      # puts them in, so a missing one is a build failure, not a
+      # warning: a missing core used to ship silently and crash
+      # the app at startup. The other engine libraries are still
+      # reported (as warnings) so a gap stays visible.
       - name: Check the APK's native libraries
         run: |
           if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
@@ -279,8 +369,14 @@ jobs:
             echo "::error::libmlmchat.so is missing from the APK — the native core build did not land in the package."
             exit 1
           fi
-          for lib in libtunnelcore.so libtunneljni.so libtun2socks.so libaether.so libtun2proxy.so libgst-core.so libtmessages.so; do
-            unzip -l "$APK" | grep -q "$lib" || echo "::warning::$lib is missing from the APK — push the prebuilt library to the repo (Git LFS) to include it."
+          for lib in libtunnelcore.so libtunneljni.so libtmessages.49.so; do
+            if ! unzip -l "$APK" | grep -q "$lib"; then
+              echo "::error::$lib is missing from the APK — the native-library fetch step did not land it in the package."
+              exit 1
+            fi
+          done
+          for lib in libtun2socks.so libaether.so libtun2proxy.so libmhrv_rs.so libtor.so; do
+            unzip -l "$APK" | grep -q "$lib" || echo "::warning::$lib is missing from the APK."
           done
 
       - name: Upload debug APKs
